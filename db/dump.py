@@ -86,6 +86,27 @@ _TABLES = {
     ),
 }
 
+_DATASET_TABLES = {
+    "dataset": (
+        "id",
+        "name",
+        "description",
+        "author",
+        "public",
+        "created",
+        "last_edited",
+    ),
+    "dataset_class": (
+        "id",
+        "name",
+        "description",
+    ),
+    "dataset_class_member": (
+        "class",
+        "mbid",
+    ),
+}
+
 
 def dump_db(location, threads=None, incremental=False, dump_id=None):
     """Create database dump in a specified location.
@@ -238,12 +259,16 @@ def _copy_tables(location, start_time=None, end_time=None):
         connection.close()
 
 
-def import_db_dump(archive_path):
+def import_db_dump(archive_path, dataset_dump=False):
     """Import data from .tar.xz archive into the database."""
     pxz_command = ["pxz", "--decompress", "--stdout", archive_path]
     pxz = subprocess.Popen(pxz_command, stdout=subprocess.PIPE)
 
     table_names = _TABLES.keys()
+    tables = _TABLES
+    if dataset_dump:
+        table_names = _DATASET_TABLES.keys()
+        tables = _DATASET_TABLES
 
     connection = db.engine.raw_connection()
     try:
@@ -267,7 +292,7 @@ def import_db_dump(archive_path):
                     if file_name in table_names:
                         logging.info(" - Importing data into %s table..." % file_name)
                         cursor.copy_from(tar.extractfile(member), '"%s"' % file_name,
-                                         columns=_TABLES[file_name])
+                                         columns=tables[file_name])
         connection.commit()
     finally:
         connection.close()
@@ -555,3 +580,73 @@ def _get_incremental_dump_timestamp(dump_id=None):
 
 class NoNewData(Exception):
     pass
+
+
+def dump_dataset_tables(location, threads=None):
+    """Create full dump of dataset tables in a specified location.
+
+    Args:
+        location: Directory where archive will be created.
+    Returns:
+        Path to created dump.
+    """
+    utils.path.create_path(location)
+    time_now = datetime.today()
+    archive_name = "acousticbrainz-dataset-dump-%s" % time_now.strftime("%Y%m%d-%H%M%S")
+
+    archive_path = os.path.join(location, archive_name + ".tar.xz")
+    with open(archive_path, "w") as archive:
+
+        pxz_command = ["pxz", "--compress"]
+        if threads is not None:
+            pxz_command.append("-T %s" % threads)
+        pxz = subprocess.Popen(pxz_command, stdin=subprocess.PIPE, stdout=archive)
+
+        # Creating the archive
+        with tarfile.open(fileobj=pxz.stdin, mode="w|") as tar:
+            temp_dir = tempfile.mkdtemp()
+
+            # Adding SCHEMA_SEQUENCE and TIMESTAMP
+            schema_seq_path = os.path.join(temp_dir, "SCHEMA_SEQUENCE")
+            with open(schema_seq_path, "w") as f:
+                f.write(str(db.SCHEMA_VERSION))
+            tar.add(schema_seq_path,
+                    arcname=os.path.join(archive_name, "SCHEMA_SEQUENCE"))
+            timestamp_path = os.path.join(temp_dir, "TIMESTAMP")
+            with open(timestamp_path, "w") as f:
+                f.write(time_now.isoformat(" "))
+            tar.add(timestamp_path,
+                    arcname=os.path.join(archive_name, "TIMESTAMP"))
+
+            dataset_tables_dir = os.path.join(temp_dir, "datasets", "datasets")
+            utils.path.create_path(dataset_tables_dir)
+            _copy_dataset_tables(dataset_tables_dir)
+            tar.add(dataset_tables_dir, arcname=os.path.join(archive_name, "abdatasetdump"))
+
+            shutil.rmtree(temp_dir)  # Cleanup
+
+        pxz.stdin.close()
+    return archive_path
+
+
+
+def _copy_dataset_tables(location):
+    """Copies all dataset tables into separate files within a specified location."""
+    connection = db.engine.raw_connection()
+    try:
+        cursor = connection.cursor()
+
+        with open(os.path.join(location, "dataset"), "w") as f:
+            logging.info(" - Copying table dataset...")
+            cursor.copy_to(f, 'dataset', columns=_DATASET_TABLES['dataset'])
+
+        with open(os.path.join(location, "dataset_class"), "w") as f:
+            logging.info(" - Copying table dataset_class...")
+            cursor.copy_to(f, 'dataset_class', columns=_DATASET_TABLES['dataset_class'])
+
+        with open(os.path.join(location, "dataset_class_member"), "w") as f:
+            logging.info(" - Copying table dataset_class_member...")
+            cursor.copy_to(f, 'dataset_class_member', columns=_DATASET_TABLES['dataset_class_member'])
+
+    finally:
+        connection.close()

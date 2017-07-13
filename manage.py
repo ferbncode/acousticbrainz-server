@@ -119,11 +119,16 @@ def init_test_db(force=False):
 
 @cli.command()
 @click.argument("archive", type=click.Path(exists=True))
-def import_data(archive):
+@click.option("--is-dataset-dump", "-d", is_flag=True,
+              help="Import a dataset archive")
+def import_data(archive, is_dataset_dump=False):
     """Imports data dump into the database."""
     db.init_db_engine(config.SQLALCHEMY_DATABASE_URI)
     print('Importing data...')
-    db.dump.import_db_dump(archive)
+    if is_dataset_dump:
+        db.dump.import_db_dump(archive, dataset_dump=True)
+    else:
+        db.dump.import_db_dump(archive)
 
 
 @cli.command()
