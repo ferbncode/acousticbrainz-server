@@ -126,9 +126,10 @@ def import_data(archive, is_dataset_dump=False):
     db.init_db_engine(config.SQLALCHEMY_DATABASE_URI)
     print('Importing data...')
     if is_dataset_dump:
-        db.dump.import_db_dump(archive, dataset_dump=True)
+        db.dump.import_datasets_dump(archive)
     else:
         db.dump.import_db_dump(archive)
+    print('Done!')
 
 
 @cli.command()

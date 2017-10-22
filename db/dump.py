@@ -100,6 +100,7 @@ _DATASET_TABLES = {
         "id",
         "name",
         "description",
+        "dataset",
     ),
     "dataset_class_member": (
         "class",
@@ -259,16 +260,12 @@ def _copy_tables(location, start_time=None, end_time=None):
         connection.close()
 
 
-def import_db_dump(archive_path, dataset_dump=False):
+def import_db_dump(archive_path):
     """Import data from .tar.xz archive into the database."""
     pxz_command = ["pxz", "--decompress", "--stdout", archive_path]
     pxz = subprocess.Popen(pxz_command, stdout=subprocess.PIPE)
 
     table_names = _TABLES.keys()
-    tables = _TABLES
-    if dataset_dump:
-        table_names = _DATASET_TABLES.keys()
-        tables = _DATASET_TABLES
 
     connection = db.engine.raw_connection()
     try:
@@ -292,7 +289,7 @@ def import_db_dump(archive_path, dataset_dump=False):
                     if file_name in table_names:
                         logging.info(" - Importing data into %s table..." % file_name)
                         cursor.copy_from(tar.extractfile(member), '"%s"' % file_name,
-                                         columns=tables[file_name])
+                                         columns=_TABLES[file_name])
         connection.commit()
     finally:
         connection.close()
@@ -650,3 +647,29 @@ def _copy_dataset_tables(location):
 
     finally:
         connection.close()
+
+
+def import_datasets_dump(archive_path):
+    """Import datasets from .tar.xz archive into the database."""
+    archive_name = os.path.basename(archive_path).split('.')[0]
+    pxz_command = ["pxz", "--decompress", "--stdout", archive_path]
+    pxz = subprocess.Popen(pxz_command, stdout=subprocess.PIPE)
+
+    table_names = ['dataset', 'dataset_class', 'dataset_class_member']
+    connection = db.engine.raw_connection()
+    try:
+        cursor = connection.cursor()
+        with tarfile.open(fileobj=pxz.stdout, mode="r|") as tar:
+            temp_dir = tempfile.mkdtemp()
+            tar.extractall(temp_dir)
+
+            for table in table_names:
+                with open(os.path.join(temp_dir, archive_name, 'abdatasetdump', table)) as f:
+                    logging.info(" - Importing data into %s table..." % table)
+                    cursor.copy_from(f, table, columns=_DATASET_TABLES[table])
+        connection.commit()
+    finally:
+        connection.close()
+
+    shutil.rmtree(temp_dir)
+    pxz.stdout.close()
